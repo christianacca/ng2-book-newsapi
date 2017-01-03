@@ -26,7 +26,7 @@ const sortByTime: ArticleSortOrderFn =
   (direction: number) => (a: Article, b: Article) => {
     return direction *
       (b.publishedAt.getTime() -
-      a.publishedAt.getTime());
+        a.publishedAt.getTime());
   };
 
 const sortByVotes: ArticleSortOrderFn =
@@ -39,19 +39,22 @@ const sortFns = {
   'Votes': sortByVotes
 };
 
+
 @Injectable()
 export class ArticleService {
   private _articles: BehaviorSubject<Article[]> =
-    new BehaviorSubject<Article[]>([]);
+  new BehaviorSubject<Article[]>([]);
   private _sources: BehaviorSubject<any> =
-    new BehaviorSubject<any>([]);
+  new BehaviorSubject<any>([]);
 
   private _refreshSubject: BehaviorSubject<string> = new
     BehaviorSubject<string>('reddit-r-all');
-  private _sortByDirectionSubject: BehaviorSubject<number> = new BehaviorSubject<number>(1);
-  private _sortByFilterSubject: BehaviorSubject<ArticleSortOrderFn> = new BehaviorSubject<ArticleSortOrderFn>(sortByTime);
+  private _sortSubject = new BehaviorSubject({
+    fn: sortByTime,
+    direction: 1
+  });
   private _filterbySubject: BehaviorSubject<string> = new
-  BehaviorSubject<string>('');
+    BehaviorSubject<string>('');
 
   public sources: Observable<any> = this._sources.asObservable();
   public articles: Observable<Article[]> = this._articles.asObservable();
@@ -61,32 +64,34 @@ export class ArticleService {
     private http: Http
   ) {
     this._refreshSubject
-        .subscribe(this.getArticles.bind(this));
+      .subscribe(this.getArticles.bind(this));
+
+    const sorter$ = this._sortSubject
+      .scan((prev, curr) => Object.assign({}, prev || {}, curr))
+      .map(({ fn, direction}) => fn(direction));
+
+    const filter$ = this._filterbySubject.map(s => {
+      const re = new RegExp(s, 'gi');
+      return (a: Article) => re.exec(a.title);
+    });
 
     this.orderedArticles =
       Observable.combineLatest(
-        this._articles,
-        this._sortByFilterSubject,
-        this._sortByDirectionSubject,
-        this._filterbySubject
+        this._articles, sorter$, filter$
       )
-      .map(([
-        articles, sorter, direction, filterStr
-      ]) => {
-        const re = new RegExp(filterStr, 'gi');
-        return articles
-          .filter(a => re.exec(a.title))
-          .sort(sorter(direction));
-      });
+        .map(([
+          articles, sorter, predicate
+        ]) => articles
+          .filter(predicate)
+          .sort(sorter)
+        );
   }
 
   public sortBy(
     filter: string,
     direction: number
   ): void {
-    this._sortByDirectionSubject.next(direction);
-    this._sortByFilterSubject
-        .next(sortFns[filter]);
+    this._sortSubject.next({ fn: sortFns[filter], direction });
   }
 
   public filterBy(filter: string) {
@@ -102,19 +107,19 @@ export class ArticleService {
     // convert response into article class
     // update our subject
     this._makeHttpRequest('/v1/articles', sourceKey)
-        .map(json => json.articles)
-        .subscribe(articlesJSON => {
-          const articles = articlesJSON
-            .map(articlejson => Article.fromJSON(articlejson));
-          this._articles.next(articles);
-        });
+      .map(json => json.articles)
+      .subscribe(articlesJSON => {
+        const articles = articlesJSON
+          .map(articlejson => Article.fromJSON(articlejson));
+        this._articles.next(articles);
+      });
   }
 
   public getSources(): void {
     this._makeHttpRequest('/v1/sources')
-        .map(json => json.sources)
-        .filter(list => list.length > 0)
-        .subscribe(this._sources);
+      .map(json => json.sources)
+      .filter(list => list.length > 0)
+      .subscribe(this._sources);
   }
 
   private _makeHttpRequest(
@@ -128,9 +133,9 @@ export class ArticleService {
     }
 
     return this.http
-            .get(`${environment.baseUrl}${path}`, {
-              search: params
-            }).map(resp => resp.json());
+      .get(`${environment.baseUrl}${path}`, {
+        search: params
+      }).map(resp => resp.json());
   }
 
 }
